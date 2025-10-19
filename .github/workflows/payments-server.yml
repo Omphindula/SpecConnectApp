@@ -1,0 +1,38 @@
+name: Build and deploy payments-server to Cloud Run
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+env:
+  SERVICE_NAME: specconnect-payments
+  REGION: us-central1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          version: '433.0.0'
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Build and submit image to Cloud Build
+        run: |
+          gcloud config set run/region $REGION
+          gcloud builds submit --tag gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.SERVICE_NAME }} ./scripts/payments-server
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.SERVICE_NAME }} \
+            --region $REGION \
+            --platform managed \
+            --allow-unauthenticated \
+            --set-secrets YOCO_SECRET_KEY=yoco-secret:latest,SUPABASE_SERVICE_ROLE_KEY=supabase-service-role:latest,YOCO_WEBHOOK_SECRET=yoco-webhook-secret:latest
+
