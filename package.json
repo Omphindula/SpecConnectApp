@@ -2,9 +2,6 @@
   "name": "specconnect-monorepo-root",
   "version": "1.0.0",
   "private": true,
-  "engines": {
-    "node": "18"
-  },
   "scripts": {
     "postinstall": "cd server/zapper_render && npm install",
     "start": "node server/zapper_render/server.js"
