@@ -9,6 +9,9 @@ services:
     branch: render-fix
     buildCommand: cd server/zapper_render && npm install
     startCommand: node server/zapper_render/server.js
+    envVars:
+      - key: NODE_VERSION
+        value: "18"
     # Optional health check
     healthCheckPath: /health
     autoDeploy: true
