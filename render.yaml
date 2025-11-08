@@ -1,0 +1,17 @@
+# Render manifest to deploy the Zapper backend from the server/zapper_render folder
+# This instructs Render to run npm install and start the server from the subdirectory
+services:
+  - type: web
+    name: specconnect-zapper-backend
+    env: node
+    # Use the Node version compatible with the package.json engines (18.x)
+    plan: free
+    branch: master
+    buildCommand: cd server/zapper_render && npm install
+    startCommand: node server/zapper_render/server.js
+    envVars:
+      - key: NODE_VERSION
+        value: "18"
+    # Optional health check
+    healthCheckPath: /health
+    autoDeploy: true
