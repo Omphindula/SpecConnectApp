@@ -1,6 +1,9 @@
 {
   "name": "specconnect-zapper-backend",
   "version": "1.0.0",
+  "engines": {
+    "node": "22.x"
+  },
   "description": "Payment backend for Zapper + Firebase integration ready for Render",
   "main": "server.js",
   "scripts": {
