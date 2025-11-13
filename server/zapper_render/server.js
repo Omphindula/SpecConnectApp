@@ -37,26 +37,36 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => 
 function initFirebaseAdmin() {
   if (admin.apps && admin.apps.length) return admin;
 
-  const svcJson = process.env.FIRESTORE_SERVICE_ACCOUNT || null;
+  // Primary env var now: FIRESTORE_SERVICE_ACCOUNT_JSON (contains the full JSON string)
+  // Backwards-compatible env names supported: FIRESTORE_SERVICE_ACCOUNT, FIRESTORE_SERVICE_ACCOUNT_BASE64, FIRESTORE_SERVICE_ACCOUNT_FILE
+  const svcJson = process.env.FIRESTORE_SERVICE_ACCOUNT_JSON || process.env.FIRESTORE_SERVICE_ACCOUNT || null;
   const svcFile = process.env.FIRESTORE_SERVICE_ACCOUNT_FILE || null;
   const svcBase64 = process.env.FIRESTORE_SERVICE_ACCOUNT_BASE64 || null;
 
   try {
     if (svcJson) {
-      // FIRESTORE_SERVICE_ACCOUNT is expected to be a JSON string
-      const obj = typeof svcJson === 'string' ? JSON.parse(svcJson) : svcJson;
-      admin.initializeApp({ credential: admin.credential.cert(obj) });
-      console.log('Initialized Firebase Admin from FIRESTORE_SERVICE_ACCOUNT env');
-      return admin;
+      // FIRESTORE_SERVICE_ACCOUNT_JSON or FIRESTORE_SERVICE_ACCOUNT is expected to be a JSON string
+      try {
+        const obj = typeof svcJson === 'string' ? JSON.parse(svcJson) : svcJson;
+        admin.initializeApp({ credential: admin.credential.cert(obj) });
+        console.log('Initialized Firebase Admin from FIRESTORE_SERVICE_ACCOUNT_JSON (or FIRESTORE_SERVICE_ACCOUNT) env');
+        return admin;
+      } catch (parseErr) {
+        throw new Error(`Failed to parse FIRESTORE_SERVICE_ACCOUNT_JSON: ${parseErr.message}`);
+      }
     }
 
     if (svcBase64) {
       // Allow base64-encoded JSON in case Render secrets were stored that way
-      const decoded = Buffer.from(svcBase64, 'base64').toString('utf8');
-      const obj = JSON.parse(decoded);
-      admin.initializeApp({ credential: admin.credential.cert(obj) });
-      console.log('Initialized Firebase Admin from FIRESTORE_SERVICE_ACCOUNT_BASE64 env');
-      return admin;
+      try {
+        const decoded = Buffer.from(svcBase64, 'base64').toString('utf8');
+        const obj = JSON.parse(decoded);
+        admin.initializeApp({ credential: admin.credential.cert(obj) });
+        console.log('Initialized Firebase Admin from FIRESTORE_SERVICE_ACCOUNT_BASE64 env');
+        return admin;
+      } catch (e) {
+        throw new Error(`Failed to parse FIRESTORE_SERVICE_ACCOUNT_BASE64: ${e.message}`);
+      }
     }
 
     if (svcFile) {
