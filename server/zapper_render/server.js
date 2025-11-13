@@ -283,6 +283,31 @@ app.get('/check-payment/:reference', async (req, res) => {
 // Simple health
 app.get('/health', (req, res) => res.json({ ok: true }));
 
+// Root — helpful landing page for browser visits
+app.get('/', (req, res) => {
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(`
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>SpecConnect Zapper Backend</title>
+        <style>body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:32px;color:#222}a{color:#0366d6}</style>
+      </head>
+      <body>
+        <h1>SpecConnect Zapper Backend</h1>
+        <p>Available endpoints:</p>
+        <ul>
+          <li><a href="/health">/health</a> — simple JSON health check</li>
+          <li><a href="/create_payment">/create_payment</a> — POST (create payment)</li>
+          <li><a href="/check-payment/:reference">/check-payment/:reference</a> — GET (check payment status)</li>
+        </ul>
+        <p>See logs in Render for initialization messages. This page is intentionally minimal.</p>
+      </body>
+    </html>
+  `);
+});
+
 app.listen(PORT, () => {
   console.log(`SpecConnect Zapper backend listening on port ${PORT}`);
 });
