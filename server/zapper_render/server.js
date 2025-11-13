@@ -16,6 +16,7 @@ const fetch = require('node-fetch');
 const crypto = require('crypto');
 const helmet = require('helmet');
 const admin = require('firebase-admin');
+const fs = require('fs');
 const dotenv = require('dotenv');
 
 dotenv.config();
@@ -38,6 +39,7 @@ function initFirebaseAdmin() {
 
   const svcJson = process.env.FIRESTORE_SERVICE_ACCOUNT || null;
   const svcFile = process.env.FIRESTORE_SERVICE_ACCOUNT_FILE || null;
+  const svcBase64 = process.env.FIRESTORE_SERVICE_ACCOUNT_BASE64 || null;
 
   try {
     if (svcJson) {
@@ -48,10 +50,22 @@ function initFirebaseAdmin() {
       return admin;
     }
 
+    if (svcBase64) {
+      // Allow base64-encoded JSON in case Render secrets were stored that way
+      const decoded = Buffer.from(svcBase64, 'base64').toString('utf8');
+      const obj = JSON.parse(decoded);
+      admin.initializeApp({ credential: admin.credential.cert(obj) });
+      console.log('Initialized Firebase Admin from FIRESTORE_SERVICE_ACCOUNT_BASE64 env');
+      return admin;
+    }
+
     if (svcFile) {
       // Use require to read local file (Render supports mounting secrets as files)
       const path = require('path');
       const resolved = path.isAbsolute(svcFile) ? svcFile : path.resolve(process.cwd(), svcFile);
+      if (!fs.existsSync(resolved)) {
+        throw new Error(`FIRESTORE_SERVICE_ACCOUNT_FILE is set to '${svcFile}', but file does not exist at resolved path '${resolved}'.`);
+      }
       const obj = require(resolved);
       admin.initializeApp({ credential: admin.credential.cert(obj) });
       console.log('Initialized Firebase Admin from FIRESTORE_SERVICE_ACCOUNT_FILE');
@@ -62,8 +76,15 @@ function initFirebaseAdmin() {
     throw e;
   }
 
-  console.warn('No Firebase service account configuration found. Set FIRESTORE_SERVICE_ACCOUNT or FIRESTORE_SERVICE_ACCOUNT_FILE.');
-  return admin; // will throw on use
+  console.warn('No Firebase service account configuration found. Falling back to Application Default Credentials. If this is a Render deployment, set FIRESTORE_SERVICE_ACCOUNT (JSON) or FIRESTORE_SERVICE_ACCOUNT_FILE (path) or FIRESTORE_SERVICE_ACCOUNT_BASE64.');
+  try {
+    admin.initializeApp();
+    console.log('Initialized Firebase Admin with default application credentials (ADC)');
+    return admin;
+  } catch (e) {
+    console.error('Failed to initialize Firebase Admin with ADC:', e && e.message ? e.message : e);
+    throw e;
+  }
 }
 
 initFirebaseAdmin();
