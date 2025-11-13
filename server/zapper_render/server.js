@@ -182,24 +182,95 @@ app.post('/create_payment', async (req, res) => {
     const { reference, amount, currency, returnUrl } = req.body || {};
     if (!reference) return res.status(400).json({ success: false, error: 'reference required' });
     if (!amount && amount !== 0) return res.status(400).json({ success: false, error: 'amount required' });
+    // If Zapper is configured, call the real PSP
+    if (ZAPPER_API_BASE) {
+      const zapper = await createZapperPayment({ reference, amount, currency, returnUrl });
+      // Persist a record with status 'created'
+      await db.collection('payments').doc(reference).set({
+        reference,
+        paymentId: zapper.paymentId || null,
+        paymentLink: zapper.paymentLink || null,
+        amount: amount || 0,
+        currency: currency || 'ZAR',
+        status: 'created',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        raw: zapper.raw || null
+      }, { merge: true });
 
-    const zapper = await createZapperPayment({ reference, amount, currency, returnUrl });
-    // Persist a record with status 'created'
-    await db.collection('payments').doc(reference).set({
-      reference,
-      paymentId: zapper.paymentId || null,
-      paymentLink: zapper.paymentLink || null,
-      amount: amount || 0,
-      currency: currency || 'ZAR',
-      status: 'created',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      raw: zapper.raw || null
-    }, { merge: true });
+      return res.json({ success: true, paymentId: zapper.paymentId || null, paymentLink: zapper.paymentLink || null });
+    }
 
-    return res.json({ success: true, paymentId: zapper.paymentId || null, paymentLink: zapper.paymentLink || null });
+    // Fallback stub: create a local payment link that marks the payment as paid when visited
+    const paymentId = 'zpay_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
+    const host = req.get('x-forwarded-host') || req.get('host');
+    const protocol = req.get('x-forwarded-proto') || (req.secure ? 'https' : 'http');
+    const base = `${protocol}://${host}`;
+    const paymentLink = returnUrl ? `${base}/pay/${paymentId}?returnUrl=${encodeURIComponent(returnUrl)}` : `${base}/pay/${paymentId}`;
+
+    // Persist to Firestore (or fallback to in-memory map)
+    try {
+      await db.collection('payments').doc(paymentId).set({
+        reference: reference || null,
+        paymentId,
+        paymentLink,
+        amount: amount || 0,
+        currency: currency || 'ZAR',
+        status: 'created',
+        returnUrl: returnUrl || null,
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    } catch (e) {
+      // If Firestore not available, keep an in-memory record
+      if (!global.__specconnect_payments) global.__specconnect_payments = {};
+      global.__specconnect_payments[paymentId] = { reference: reference || null, paymentId, paymentLink, amount: amount || 0, currency: currency || 'ZAR', status: 'created', returnUrl: returnUrl || null, createdAt: new Date().toISOString() };
+    }
+
+    return res.json({ success: true, paymentId, paymentLink });
   } catch (e) {
     console.error('create_payment error', e && e.message ? e.message : e);
     return res.status(500).json({ success: false, error: String(e) });
+  }
+});
+
+// Simple pay page for stubbed payments — marks payment paid and optionally redirects to returnUrl
+app.get('/pay/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    let docData = null;
+    try {
+      const snap = await db.collection('payments').doc(String(id)).get();
+      if (snap.exists) docData = snap.data() || null;
+    } catch (e) {
+      // ignore Firestore errors and try in-memory
+    }
+
+    if (!docData && global.__specconnect_payments && global.__specconnect_payments[id]) {
+      docData = global.__specconnect_payments[id];
+    }
+
+    if (!docData) return res.status(404).send('<h1>Payment not found</h1>');
+
+    // Update status to paid
+    try {
+      await db.collection('payments').doc(String(id)).set({ status: 'paid', paidAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    } catch (e) {
+      if (global.__specconnect_payments && global.__specconnect_payments[id]) {
+        global.__specconnect_payments[id].status = 'paid';
+        global.__specconnect_payments[id].paidAt = new Date().toISOString();
+      }
+    }
+
+    const returnUrl = (docData && (docData.returnUrl || req.query.returnUrl)) || null;
+    if (returnUrl) {
+      const sep = returnUrl.includes('?') ? '&' : '?';
+      const redirectTo = `${returnUrl}${sep}paymentId=${encodeURIComponent(id)}${docData && docData.reference ? `&reference=${encodeURIComponent(docData.reference)}` : ''}`;
+      return res.send(`<!doctype html><html><head><meta charset="utf-8" /><title>Payment Completed</title><meta http-equiv="refresh" content="0;url=${redirectTo}"/></head><body><h1>Payment Completed</h1><p>Redirecting...</p><p>If not redirected, <a href="${redirectTo}">click here</a>.</p></body></html>`);
+    }
+
+    return res.send(`<!doctype html><html><head><meta charset="utf-8" /><title>Payment Completed</title></head><body><h1>Payment Completed</h1><p>Payment ID: ${id}</p><p>Status: paid</p></body></html>`);
+  } catch (e) {
+    console.error('pay handler error', e);
+    return res.status(500).send('<h1>Server error</h1>');
   }
 });
 
