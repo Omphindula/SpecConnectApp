@@ -186,8 +186,9 @@ app.post('/create_payment', async (req, res) => {
     if (ZAPPER_API_BASE) {
       const zapper = await createZapperPayment({ reference, amount, currency, returnUrl });
       // Persist a record with status 'created'
-      await db.collection('payments').doc(reference).set({
-        reference,
+      // Write under the appointment reference (if given) and under the paymentId for lookup
+      const rec = {
+        reference: reference || null,
         paymentId: zapper.paymentId || null,
         paymentLink: zapper.paymentLink || null,
         amount: amount || 0,
@@ -195,7 +196,13 @@ app.post('/create_payment', async (req, res) => {
         status: 'created',
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         raw: zapper.raw || null
-      }, { merge: true });
+      };
+      if (reference) {
+        await db.collection('payments').doc(String(reference)).set(rec, { merge: true });
+      }
+      if (zapper.paymentId) {
+        await db.collection('payments').doc(String(zapper.paymentId)).set(rec, { merge: true });
+      }
 
       return res.json({ success: true, paymentId: zapper.paymentId || null, paymentLink: zapper.paymentLink || null });
     }
@@ -207,22 +214,17 @@ app.post('/create_payment', async (req, res) => {
     const base = `${protocol}://${host}`;
     const paymentLink = returnUrl ? `${base}/pay/${paymentId}?returnUrl=${encodeURIComponent(returnUrl)}` : `${base}/pay/${paymentId}`;
 
-    // Persist to Firestore (or fallback to in-memory map)
+    // Persist to Firestore (or fallback to in-memory map).
+    // Store both under the appointment reference (if provided) and paymentId for easier lookup.
+    const rec = { reference: reference || null, paymentId, paymentLink, amount: amount || 0, currency: currency || 'ZAR', status: 'created', returnUrl: returnUrl || null, createdAt: admin.firestore.FieldValue.serverTimestamp() };
     try {
-      await db.collection('payments').doc(paymentId).set({
-        reference: reference || null,
-        paymentId,
-        paymentLink,
-        amount: amount || 0,
-        currency: currency || 'ZAR',
-        status: 'created',
-        returnUrl: returnUrl || null,
-        createdAt: admin.firestore.FieldValue.serverTimestamp()
-      }, { merge: true });
+      if (reference) await db.collection('payments').doc(String(reference)).set(rec, { merge: true });
+      await db.collection('payments').doc(String(paymentId)).set(rec, { merge: true });
     } catch (e) {
       // If Firestore not available, keep an in-memory record
       if (!global.__specconnect_payments) global.__specconnect_payments = {};
-      global.__specconnect_payments[paymentId] = { reference: reference || null, paymentId, paymentLink, amount: amount || 0, currency: currency || 'ZAR', status: 'created', returnUrl: returnUrl || null, createdAt: new Date().toISOString() };
+      global.__specconnect_payments[paymentId] = { ...rec, createdAt: new Date().toISOString() };
+      if (reference) global.__specconnect_payments[reference] = global.__specconnect_payments[paymentId];
     }
 
     return res.json({ success: true, paymentId, paymentLink });
@@ -273,6 +275,40 @@ app.get('/pay/:id', async (req, res) => {
     return res.status(500).send('<h1>Server error</h1>');
   }
 });
+
+// Dev-only: allow simulating a webhook into Firestore for testing when enabled.
+// Enable by setting ENABLE_SIMULATE_WEBHOOK=true and SIMULATE_WEBHOOK_TOKEN to a secret value in your local .env.
+if ((process.env.ENABLE_SIMULATE_WEBHOOK || '').toLowerCase() === 'true') {
+  app.post('/simulate-webhook', async (req, res) => {
+    try {
+      const token = req.get('x-dev-token') || req.query.token || '';
+      if (!process.env.SIMULATE_WEBHOOK_TOKEN || token !== process.env.SIMULATE_WEBHOOK_TOKEN) {
+        return res.status(403).json({ success: false, error: 'forbidden' });
+      }
+      const event = req.body || {};
+      const paymentId = event.paymentId || event.id || event.data?.id || `sim_${Date.now()}`;
+      const reference = event.reference || event.data?.reference || event.data?.metadata?.reference || null;
+      const status = (event.status || event.transactionStatus || event.data?.status || 'paid').toString().toLowerCase();
+
+      const docId = paymentId || reference || `sim_${Date.now()}`;
+      const rec = { paymentId: paymentId || null, reference: reference || null, status, raw: event, receivedAt: admin.firestore.FieldValue.serverTimestamp() };
+      try {
+        await db.collection('payments').doc(String(docId)).set(rec, { merge: true });
+        if (reference) await db.collection('payments').doc(String(reference)).set(rec, { merge: true });
+      } catch (e) {
+        // fallback to memory
+        if (!global.__specconnect_payments) global.__specconnect_payments = {};
+        global.__specconnect_payments[docId] = { ...rec, receivedAt: new Date().toISOString() };
+        if (reference) global.__specconnect_payments[reference] = global.__specconnect_payments[docId];
+      }
+
+      return res.json({ success: true, docId });
+    } catch (e) {
+      console.error('simulate-webhook error', e);
+      return res.status(500).json({ success: false, error: String(e) });
+    }
+  });
+}
 
 // Webhook endpoint
 app.post('/zapper-webhook', async (req, res) => {
